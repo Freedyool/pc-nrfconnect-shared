@@ -15,7 +15,6 @@ import telemetry from '../../telemetry/telemetry';
 import useHotKey from '../../utils/useHotKey';
 import {
     clearWaitForDevice,
-    getWaitingToAutoReselect,
     setAutoSelectDevice,
 } from '../deviceAutoSelectSlice';
 import {
@@ -29,13 +28,15 @@ import {
     deselectDevice,
     deselectVirtualDevice,
     Device,
-    deviceIsSelected as deviceIsSelectedSelector,
+    DeviceSelector,
+    getDeviceSelectors,
     isDeviceWithSerialNumber,
     selectDevice,
-    selectedDevice,
-    selectedVirtualDevice,
     selectVirtualDevice,
     setSelectedDeviceInfo,
+    addDeviceSelector,
+    toggleDeviceSelector,
+    getDeviceSelector,
 } from '../deviceSlice';
 import DeviceList from './DeviceList/DeviceList';
 import SelectDevice from './SelectDevice';
@@ -43,25 +44,28 @@ import SelectedDevice from './SelectedDevice';
 import SelectedVirtualDevice from './SelectedVirtualDevice';
 
 export interface Props {
+    deviceSelectedList?: string[];
     deviceListing: DeviceTraits;
     deviceSetupConfig?: DeviceSetupConfig;
     onDeviceSelected?: (
+        selector: number,
         device: Device,
         autoReselected: boolean,
         abortController: AbortController
     ) => void;
-    onDeviceDeselected?: () => void;
+    onDeviceDeselected?: (selector: number) => void;
     onDeviceConnected?: (device: Device) => void;
     onDeviceDisconnected?: (device: Device) => void;
     onDeviceIsReady?: (device: Device) => void;
     deviceFilter?: (device: Device) => boolean;
     virtualDevices?: string[];
-    onVirtualDeviceSelected?: (device: string) => void;
-    onVirtualDeviceDeselected?: () => void;
+    onVirtualDeviceSelected?: (selector: number, device: string) => void;
+    onVirtualDeviceDeselected?: (selector: number) => void;
 }
 
 const noop = () => {};
 export default ({
+    deviceSelectedList = ["SELECT DEVICE"],
     deviceListing,
     deviceSetupConfig,
     onDeviceSelected = noop,
@@ -75,18 +79,16 @@ export default ({
     onVirtualDeviceDeselected = noop,
 }: Props) => {
     const dispatch = useDispatch();
-    const [deviceListVisible, setDeviceListVisible] = useState(false);
+    const deviceSelectors = useSelector(getDeviceSelectors);
 
-    const deviceIsSelected = useSelector(deviceIsSelectedSelector);
-    const currentDevice = useSelector(selectedDevice);
-    const waitingToAutoReconnect = useSelector(getWaitingToAutoReselect);
-    const showSelectedDevice = deviceIsSelected || waitingToAutoReconnect;
-    const virtualDeviceSelected = useSelector(selectedVirtualDevice);
+    const currentSelector = useSelector(getDeviceSelector);
+    const currentDevice = currentSelector?.selectedDevice;
+    const currentVirtualDevice = currentSelector?.selectedVirtualDevice;
 
     const abortController = useRef<AbortController>();
 
     const doDeselectDevice = useCallback(
-        (device?: Device) => {
+        (selector?: number, device?: Device) => {
             abortController.current?.abort();
             if (device) {
                 telemetry.sendEvent(
@@ -98,8 +100,10 @@ export default ({
             dispatch(clearWaitForDevice());
             dispatch(setAutoSelectDevice(undefined));
             logger.info(`Deselected device`);
-            onDeviceDeselected();
-            dispatch(deselectDevice());
+            onDeviceDeselected(selector ?? -3);
+            if (device) {
+                dispatch(deselectDevice(device));
+            }
         },
         [dispatch, onDeviceDeselected]
     );
@@ -108,7 +112,7 @@ export default ({
     // not updated frequently as this
     // will have a side effect to stop and start the hotplug events
     const doSelectDevice = useCallback(
-        async (device: Device, autoReselected: boolean) => {
+        async (selector: number, device: Device, autoReselected: boolean) => {
             logger.info(
                 `Selecting device with the serial number ${device.serialNumber}`
             );
@@ -117,7 +121,6 @@ export default ({
             abortController.current = controller;
 
             dispatch(clearWaitForDevice());
-            setDeviceListVisible(false);
             dispatch(selectDevice(device));
             dispatch(setAutoSelectDevice(device));
 
@@ -143,7 +146,7 @@ export default ({
                 logger.info(
                     `Selected device with the serial number ${device.serialNumber}`
                 );
-                onDeviceSelected(device, autoReselected, controller);
+                onDeviceSelected(selector, device, autoReselected, controller);
 
                 telemetry.sendEvent('device selected', {
                     device: simplifyDevice(device),
@@ -157,7 +160,7 @@ export default ({
                                 device,
                                 deviceSetupConfig,
                                 onDeviceIsReady,
-                                doDeselectDevice,
+                                (d) => doDeselectDevice(selector, d),
                                 deviceInfo
                             )
                         );
@@ -185,8 +188,8 @@ export default ({
                 deviceListing,
                 onDeviceConnected,
                 onDeviceDisconnected,
-                onDeviceDeselected,
-                doSelectDevice
+                () => onDeviceDeselected(-1),
+                (d, a) => doSelectDevice(-1, d, a),
             )
         );
     }, [
@@ -198,9 +201,6 @@ export default ({
         doSelectDevice,
     ]);
 
-    const toggleDeviceListVisible = () =>
-        setDeviceListVisible(!deviceListVisible);
-
     useEffect(() => {
         doStartWatchingDevices();
         return stopWatchingDevices;
@@ -210,74 +210,116 @@ export default ({
         hotKey: 'alt+s',
         title: 'Select device',
         isGlobal: true,
-        action: () => toggleDeviceListVisible(),
+        action: () => dispatch(toggleDeviceSelector(currentSelector?.id ?? 0)),
+    });
+
+    const toggleDeviceListVisible = (selector: number) => {
+        let count = 0;
+        deviceSelectors.forEach((sel, index) => {
+            if (sel.isListVisible && index !== selector) {
+                dispatch(toggleDeviceSelector(index));
+                count++;
+            }
+        });
+        if (count === 0) {
+            dispatch(toggleDeviceSelector(selector));
+        } else {
+            setTimeout(() => {
+                dispatch(toggleDeviceSelector(selector));
+            }, 300);
+        }
+    }
+    
+    const devices = deviceSelectedList.map((title, index) => {
+        const deviceSeletor:DeviceSelector = {
+            id: index,
+            isListVisible: false,
+        };
+        dispatch(addDeviceSelector(deviceSeletor));
+
+        return <div className="select-item" key={index}>
+            <SelectDevice
+                selectorId={index}
+                deviceTitle={title}
+                toggleDeviceListVisible={() => toggleDeviceListVisible(index)}
+            />
+            <SelectedDevice
+                selectorId={index}
+                doDeselectDevice={(d) => doDeselectDevice(index, d)}
+                toggleDeviceListVisible={() => toggleDeviceListVisible(index)}
+            />
+            <SelectedVirtualDevice
+                selectorId={index}
+                doDeselectDevice={() => {
+                    onVirtualDeviceDeselected(index);
+                    dispatch(deselectVirtualDevice(index));
+                }}
+                toggleDeviceListVisible={() => toggleDeviceListVisible(index)}
+            />
+        </div> 
     });
 
     return (
         <div className="core19-device-selector">
-            {!showSelectedDevice && !virtualDeviceSelected && (
-                <SelectDevice
-                    deviceListVisible={deviceListVisible}
-                    toggleDeviceListVisible={toggleDeviceListVisible}
-                />
-            )}
-            {showSelectedDevice && (
-                <SelectedDevice
-                    doDeselectDevice={() => doDeselectDevice(currentDevice)}
-                    toggleDeviceListVisible={toggleDeviceListVisible}
-                />
-            )}
-            {virtualDeviceSelected && (
-                <SelectedVirtualDevice
-                    virtualDevice={virtualDeviceSelected}
-                    deselectVirtualDevice={() => {
-                        onVirtualDeviceDeselected();
-                        dispatch(deselectVirtualDevice());
-                    }}
-                    toggleDeviceListVisible={toggleDeviceListVisible}
-                />
-            )}
+            <div className="select-container">
+                { devices }
+            </div>
             <DeviceList
-                isVisible={deviceListVisible}
+                isVisible={!!currentSelector}
                 doSelectDevice={(device, autoReselected) => {
                     if (device.id === currentDevice?.id) {
-                        setDeviceListVisible(false);
+                        dispatch(toggleDeviceSelector(-1));
                         return;
                     }
 
-                    if (deviceIsSelected) {
-                        doDeselectDevice(currentDevice);
+                    const index = deviceSelectors.findIndex(
+                        item => 
+                            device.id === item.selectedDevice?.id ||
+                            device.serialNumber === item.selectedDevice?.serialNumber
+                    );
+                    if (index !== -1) {
+                        doDeselectDevice(index, device);
                     }
 
-                    if (virtualDeviceSelected) {
-                        dispatch(deselectVirtualDevice());
-                        onVirtualDeviceDeselected();
+                    if (!!currentDevice) {
+                        doDeselectDevice(currentSelector.id, currentDevice);
                     }
 
-                    doSelectDevice(device, autoReselected);
+                    if (!!currentVirtualDevice) {
+                        dispatch(deselectVirtualDevice(-1));
+                        onVirtualDeviceDeselected(currentSelector.id);
+                    }
+
+                    doSelectDevice(currentSelector?.id ?? -2, device, autoReselected);
                 }}
                 virtualDevices={virtualDevices}
                 doSelectVirtualDevice={device => {
-                    if (virtualDeviceSelected === device) {
-                        setDeviceListVisible(false);
+                    if (currentVirtualDevice === device) {
+                        dispatch(toggleDeviceSelector(-1));
                         return;
                     }
 
-                    if (deviceIsSelected) {
-                        doDeselectDevice(currentDevice);
+                    const index = deviceSelectors.findIndex(
+                        item => device === item.selectedVirtualDevice
+                    );
+                    if (index !== -1) {
+                        dispatch(deselectVirtualDevice(index));
                     }
 
-                    if (virtualDeviceSelected) {
-                        dispatch(deselectVirtualDevice());
-                        onVirtualDeviceSelected(device);
+                    if (!!currentDevice) {
+                        doDeselectDevice(currentSelector.id, currentDevice);
+                    }
+
+                    if (!!currentVirtualDevice) {
+                        dispatch(deselectVirtualDevice(-1));
+                        onVirtualDeviceDeselected(currentSelector.id);
                     }
 
                     dispatch(clearWaitForDevice());
-                    setDeviceListVisible(false);
                     abortController.current?.abort();
 
                     dispatch(selectVirtualDevice(device));
-                    onVirtualDeviceSelected(device);
+                    onVirtualDeviceSelected(currentSelector?.id ?? -2, device);
                 }}
                 deviceFilter={deviceFilter}
             />

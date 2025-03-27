@@ -7,11 +7,25 @@
 @import "../../variables";
 
 .core19-device-selector {
+    .select-container {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+    }
+
+    .select-item {
+        flex: 1;
+    }
+
     .select-device {
         font-size: 16px;
         background: $primary;
 
-        padding-left: 68px;
+        padding-left: 6px;
+        &.single {
+            padding-left: 25% !important;
+        }
+
         text-transform: uppercase;
 
         color: $white;
@@ -28,7 +42,10 @@
         }
 
         img {
-            margin-right: 10px !important;
+            margin-right: 6px;
+            &.single {
+                margin-right: 10px !important;
+            }
             transition: transform 100ms linear;
             &.img-rotate {
                 transform: rotate(180deg);

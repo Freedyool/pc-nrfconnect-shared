@@ -27,6 +27,14 @@ export interface DeviceWithSerialNumber extends Device {
     serialNumber: string;
 }
 
+export interface DeviceSelector {
+    id: number;
+    isListVisible: boolean;
+    selectedDevice?: Device;
+    selectedDeviceInfo?: DeviceInfo;
+    selectedVirtualDevice?: string;
+}
+
 export const isDeviceWithSerialNumber = (
     device: Device
 ): device is DeviceWithSerialNumber =>
@@ -56,8 +64,28 @@ const updateDevice = (
     }
 };
 
+const findCurrentSelector = (
+    selectors: DeviceSelector[],
+) => {
+    const index = selectors.findIndex(ds => ds.isListVisible === true);
+
+    return { index, selector: selectors[index] };
+}
+
+const updateDeviceSelector = (
+    state: DeviceState,
+    updateToMergeIn: Partial<DeviceSelector>,
+    id?: number,
+) => {
+    const deviceSelector = id !== undefined ? state.deviceSelectors[id] : state.deviceSelectors.find(sel => sel.isListVisible === true);
+    if (deviceSelector) {
+        Object.assign(deviceSelector, updateToMergeIn);
+    }
+};
+
 export interface DeviceState {
     devices: Device[];
+    deviceSelectors: DeviceSelector[],
     selectedDevice?: Device;
     selectedDeviceInfo?: DeviceInfo;
     selectedVirtualDevice?: string;
@@ -65,6 +93,7 @@ export interface DeviceState {
 
 const initialState: DeviceState = {
     devices: [],
+    deviceSelectors: [],
 };
 
 const slice = createSlice({
@@ -75,22 +104,25 @@ const slice = createSlice({
          * Indicates that a device has been selected.
          */
         selectDevice: (state, action: PayloadAction<Device>) => {
-            state.selectedDevice = action.payload;
+            updateDeviceSelector(
+                state,
+                {
+                    selectedDevice: action.payload,
+                    isListVisible: false,
+                },
+            );
         },
 
         setSelectedDeviceInfo: (
             state,
             action: PayloadAction<DeviceInfo | undefined>
         ) => {
-            state.selectedDeviceInfo = action.payload;
-        },
-
-        /*
-         * Indicates that the currently selected device has been deselected.
-         */
-        deselectDevice: state => {
-            state.selectedDevice = undefined;
-            state.selectedDeviceInfo = undefined;
+            updateDeviceSelector(
+                state,
+                {
+                    selectedDeviceInfo: action.payload,
+                },
+            );
         },
 
         addDevice: (state, action: PayloadAction<Device>) => {
@@ -227,12 +259,68 @@ const slice = createSlice({
         },
 
         selectVirtualDevice: (state, action: PayloadAction<string>) => {
-            state.selectedVirtualDevice = action.payload;
+            updateDeviceSelector(
+                state,
+                {
+                    selectedVirtualDevice: action.payload,
+                    isListVisible: false,
+                },
+            );
         },
 
-        deselectVirtualDevice: state => {
-            state.selectedVirtualDevice = undefined;
+        /*
+         * Indicates that the currently selected device has been deselected.
+         */
+        deselectDevice: (state, action: PayloadAction<Device>) => {
+            const index = state.deviceSelectors.findIndex(
+                item => item.selectedDevice?.id === action.payload.id
+            );
+            if (index !== -1) {
+                updateDeviceSelector(
+                    state,
+                    {
+                        selectedDevice: undefined,
+                        selectedVirtualDevice: undefined,
+                    },
+                    index,
+                )
+            }
         },
+
+        deselectVirtualDevice: (state, action: PayloadAction<number>) => {
+            if (action.payload >= state.deviceSelectors.length) return;
+            updateDeviceSelector(
+                state,
+                {
+                    selectedVirtualDevice: undefined,
+                },
+                action.payload === -1 ? undefined : action.payload,
+            )
+        },
+
+        addDeviceSelector: (state, action: PayloadAction<DeviceSelector>) => {
+            const index = state.deviceSelectors.findIndex(
+                item => item.id === action.payload.id
+            );
+            if (index === -1) {
+                state.deviceSelectors?.push(action.payload);
+            }
+        },
+
+        toggleDeviceSelector: (state, action: PayloadAction<number>) => {
+            if (action.payload >= state.deviceSelectors.length) return;
+            if (action.payload === -1) {
+                updateDeviceSelector(state, { isListVisible: false });
+            } else {
+                updateDeviceSelector(
+                    state,
+                    {
+                        isListVisible: !state.deviceSelectors[action.payload].isListVisible,
+                    },
+                    action.payload,
+                )
+            }
+        }
     },
 });
 
@@ -250,6 +338,8 @@ export const {
         persistSerialPortOptions,
         selectVirtualDevice,
         deselectVirtualDevice,
+        addDeviceSelector,
+        toggleDeviceSelector,
     },
 } = slice;
 
@@ -274,3 +364,8 @@ export const getReadbackProtection = (state: RootState) =>
 
 export const selectedVirtualDevice = (state: RootState) =>
     state.device.selectedVirtualDevice;
+
+export const getDeviceSelector = (state: RootState) =>
+    state.device.deviceSelectors.find(ds => ds.isListVisible === true);
+
+export const getDeviceSelectors = (state: RootState) => state.device.deviceSelectors;
